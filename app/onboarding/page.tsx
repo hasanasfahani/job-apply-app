@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase } from '@/lib/supabase';
 
 const JOB_TITLE_SUGGESTIONS = [
   'Software Engineer', 'Senior Software Engineer', 'Frontend Developer', 'Backend Developer',
