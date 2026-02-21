@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { sendJobNotificationEmail } from '@/lib/email';
+import { sendJobNotificationEmail } from '@/lib/emailService';
 
 // This secret prevents random people from triggering your notifications
 const CRON_SECRET = process.env.CRON_SECRET;
