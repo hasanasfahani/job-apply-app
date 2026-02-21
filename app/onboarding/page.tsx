@@ -32,6 +32,7 @@ const CITIES = [
   'San Francisco', 'Los Angeles', 'Chicago', 'Toronto',
   'Vancouver', 'Sydney', 'Melbourne', 'Singapore',
   'Hong Kong', 'Mumbai', 'Bangalore',
+  'Berlin', 'Munich', 'Hamburg', 'Frankfurt', 'Cologne',
   'Remote - Worldwide', 'Remote - MENA', 'Remote - Europe', 'Remote - US',
 ];
 
