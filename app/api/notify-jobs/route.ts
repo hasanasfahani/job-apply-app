@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import Anthropic from '@anthropic-ai/sdk';
 import { sendJobNotificationEmail } from '@/lib/emailService';
+import { generateCVPdf, generateCoverLetterPdf } from '@/lib/generatePDF';
 
 export const maxDuration = 60;
 
@@ -51,10 +52,59 @@ CANDIDATE CV: ${cvText?.slice(0, 1000)}`,
   return parsed.requirements;
 }
 
+async function generateOptimizedCV(cvText: string, jobTitle: string, jobDescription: string, company: string): Promise<string> {
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 2000,
+    messages: [{
+      role: 'user',
+      content: `You are an expert ATS CV writer. Rewrite this CV to maximize ATS pass rate for this specific job.
+STRICT RULES:
+- Maximum 2 pages worth of content (max 600 words)
+- Use ONLY these section headers: PROFESSIONAL SUMMARY, AREA OF EXPERTISE, CAREER EXPERIENCE, EDUCATION, TRAINING & CERTIFICATIONS, LANGUAGES
+- Mirror exact keywords from the job description naturally
+- Use bullet points starting with • for experience items
+- Quantify achievements with numbers wherever possible
+- Keep all facts true — only reorder, rephrase, emphasize
+- Do NOT include the person's name or contact info
+- Return ONLY the CV content starting from PROFESSIONAL SUMMARY
+JOB TITLE: ${jobTitle}
+COMPANY: ${company}
+JOB DESCRIPTION: ${jobDescription?.slice(0, 1000)}
+ORIGINAL CV: ${cvText?.slice(0, 1500)}`,
+    }],
+  });
+  return (response.content[0] as { text: string }).text;
+}
+
+async function generateCoverLetter(cvText: string, jobTitle: string, jobDescription: string, company: string): Promise<string> {
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 800,
+    messages: [{
+      role: 'user',
+      content: `Write a professional ATS-optimized cover letter for this job.
+STRICT RULES:
+- Exactly 3 paragraphs
+- Naturally include keywords from the job description
+- Paragraph 1: Opening — mention exact job title and company, why excited
+- Paragraph 2: Top 2-3 specific achievements from CV that match job requirements with numbers
+- Paragraph 3: Brief closing with call to action
+- Do NOT include date, address headers or sign-off — just the 3 paragraphs
+- Sound human and confident, not robotic
+- Max 250 words total
+- Return ONLY the 3 paragraphs
+JOB TITLE: ${jobTitle}
+COMPANY: ${company}
+JOB DESCRIPTION: ${jobDescription?.slice(0, 1000)}
+CANDIDATE CV: ${cvText?.slice(0, 1500)}`,
+    }],
+  });
+  return (response.content[0] as { text: string }).text;
+}
+
 export async function POST(request: Request) {
   const body = await request.json();
-
-  // Accept secret from body (QStash) or query param (manual test)
   const secret = body.secret || new URL(request.url).searchParams.get('secret');
   if (secret !== CRON_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -89,9 +139,15 @@ export async function POST(request: Request) {
       },
     });
     const data = await response.json();
-    const jobs = (data.data || []).slice(0, 3);
 
-    for (const job of jobs) {
+    // Only process jobs posted in the last 24 hours or with no date
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recentJobs = (data.data || []).filter((job: any) => {
+      if (!job.job_posted_at_datetime_utc) return false;
+      return new Date(job.job_posted_at_datetime_utc) >= oneDayAgo;
+    }).slice(0, 3);
+
+    for (const job of recentJobs) {
       const externalJobId = job.job_id;
 
       const { data: alreadySent } = await supabase
@@ -103,6 +159,7 @@ export async function POST(request: Request) {
 
       if (alreadySent) continue;
 
+      // Calculate fit score
       let fitScore = null;
       let fitNote = null;
       try {
@@ -113,6 +170,7 @@ export async function POST(request: Request) {
         console.error('Fit score error:', e);
       }
 
+      // Always record to avoid reprocessing
       await supabase.from('email_notifications').insert({
         user_id: profile.id,
         job_id: externalJobId,
@@ -121,6 +179,7 @@ export async function POST(request: Request) {
 
       if (!fitScore || fitScore < 7) continue;
 
+      // Extract requirements
       let requirements = [];
       try {
         requirements = await extractJobRequirements(profile.cv_text, job.job_title, job.job_description, job.employer_name);
@@ -128,6 +187,31 @@ export async function POST(request: Request) {
         console.error('Requirements error:', e);
       }
 
+      // Generate optimized CV and cover letter
+      let optimizedCv = '';
+      let coverLetter = '';
+      try {
+        [optimizedCv, coverLetter] = await Promise.all([
+          generateOptimizedCV(profile.cv_text, job.job_title, job.job_description, job.employer_name),
+          generateCoverLetter(profile.cv_text, job.job_title, job.job_description, job.employer_name),
+        ]);
+      } catch (e) {
+        console.error('Document generation error:', e);
+      }
+
+      // Generate PDFs
+      let cvPdfBuffer: Buffer | null = null;
+      let coverLetterPdfBuffer: Buffer | null = null;
+      try {
+        [cvPdfBuffer, coverLetterPdfBuffer] = await Promise.all([
+          generateCVPdf(optimizedCv, profile.full_name, profile.email, profile.phone || '', job.job_title),
+          generateCoverLetterPdf(coverLetter, profile.full_name, profile.email, profile.phone || '', job.employer_name, job.job_title, `${job.job_city || ''} ${job.job_country || ''}`.trim()),
+        ]);
+      } catch (e) {
+        console.error('PDF generation error:', e);
+      }
+
+      // Save job to database
       await supabase.from('jobs').upsert({
         user_id: profile.id,
         external_job_id: externalJobId,
@@ -146,6 +230,7 @@ export async function POST(request: Request) {
         fit_note: fitNote,
       }, { onConflict: 'user_id,external_job_id' });
 
+      // Send email with PDF attachments
       await sendJobNotificationEmail({
         toEmail: profile.email,
         jobTitle: job.job_title,
@@ -159,6 +244,8 @@ export async function POST(request: Request) {
         jobUrl: job.job_apply_link,
         requirements,
         candidateName: profile.full_name || 'there',
+        cvPdfBuffer,
+        coverLetterPdfBuffer,
       });
 
       totalEmailsSent++;
