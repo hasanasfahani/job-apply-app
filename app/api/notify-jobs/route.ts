@@ -51,132 +51,121 @@ CANDIDATE CV: ${cvText?.slice(0, 1000)}`,
   return parsed.requirements;
 }
 
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  if (searchParams.get('secret') !== CRON_SECRET) {
+export async function POST(request: Request) {
+  const body = await request.json();
+
+  // Accept secret from body (QStash) or query param (manual test)
+  const secret = body.secret || new URL(request.url).searchParams.get('secret');
+  if (secret !== CRON_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const userId = body.userId;
+  if (!userId) return NextResponse.json({ error: 'No userId provided' }, { status: 400 });
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
+  const { data: profile } = await supabase.from('profiles').select('*').eq('id', userId).single();
+  if (!profile?.cv_text) return NextResponse.json({ skipped: 'No CV' });
+
+  const { data: prefs } = await supabase.from('job_preferences').select('*').eq('user_id', userId).single();
+  if (!prefs?.job_titles?.length || !prefs?.cities?.length) return NextResponse.json({ skipped: 'No preferences' });
+
+  const title = prefs.job_titles[0];
+  const city = prefs.cities[0];
+  const query = `${title} in ${city}`;
+  const url = `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(query)}&num_pages=1&page=1`;
+
+  let totalEmailsSent = 0;
+
   try {
-    const { data: profiles } = await supabase.from('profiles').select('*');
-    let totalEmailsSent = 0;
+    const response = await fetch(url, {
+      headers: {
+        'x-rapidapi-host': 'jsearch.p.rapidapi.com',
+        'x-rapidapi-key': process.env.RAPIDAPI_KEY!,
+      },
+    });
+    const data = await response.json();
+    const jobs = (data.data || []).slice(0, 3);
 
-    for (const profile of profiles || []) {
-      if (!profile.cv_text) continue;
+    for (const job of jobs) {
+      const externalJobId = job.job_id;
 
-      const { data: prefs } = await supabase
-        .from('job_preferences')
-        .select('*')
+      const { data: alreadySent } = await supabase
+        .from('email_notifications')
+        .select('id')
         .eq('user_id', profile.id)
+        .eq('job_id', externalJobId)
         .single();
 
-      if (!prefs?.job_titles?.length || !prefs?.cities?.length) continue;
+      if (alreadySent) continue;
 
-      // Only 1 title and 1 city per run to avoid timeout
-      const title = prefs.job_titles[0];
-      const city = prefs.cities[0];
-      const query = `${title} in ${city}`;
-      const url = `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(query)}&num_pages=1&page=1`;
-
+      let fitScore = null;
+      let fitNote = null;
       try {
-        const response = await fetch(url, {
-          headers: {
-            'x-rapidapi-host': 'jsearch.p.rapidapi.com',
-            'x-rapidapi-key': process.env.RAPIDAPI_KEY!,
-          },
-        });
-        const data = await response.json();
-        const jobs = (data.data || []).slice(0, 3); // Max 3 jobs per run
-
-        for (const job of jobs) {
-          const externalJobId = job.job_id;
-
-          const { data: alreadySent } = await supabase
-            .from('email_notifications')
-            .select('id')
-            .eq('user_id', profile.id)
-            .eq('job_id', externalJobId)
-            .single();
-
-          if (alreadySent) continue;
-
-          // Score the job
-          let fitScore = null;
-          let fitNote = null;
-          try {
-            const fit = await calculateFitScore(profile.cv_text, job.job_title, job.job_description, job.employer_name);
-            fitScore = fit.score;
-            fitNote = fit.note;
-          } catch (e) {
-            console.error('Fit score error:', e);
-          }
-
-          // Always record to avoid reprocessing
-          await supabase.from('email_notifications').insert({
-            user_id: profile.id,
-            job_id: externalJobId,
-            fit_score: fitScore,
-          });
-
-          if (!fitScore || fitScore < 7) continue;
-
-          // Extract requirements
-          let requirements = [];
-          try {
-            requirements = await extractJobRequirements(profile.cv_text, job.job_title, job.job_description, job.employer_name);
-          } catch (e) {
-            console.error('Requirements error:', e);
-          }
-
-          // Save job
-          await supabase.from('jobs').upsert({
-            user_id: profile.id,
-            external_job_id: externalJobId,
-            title: job.job_title,
-            company: job.employer_name,
-            location: `${job.job_city || ''} ${job.job_country || ''}`.trim(),
-            work_type: job.job_is_remote ? 'Remote' : 'On-site',
-            description: job.job_description?.slice(0, 2000),
-            url: job.job_apply_link,
-            platform: job.job_publisher,
-            salary_range: job.job_min_salary ? `${job.job_min_salary} - ${job.job_max_salary} ${job.job_salary_currency}` : null,
-            date_posted: job.job_posted_at_datetime_utc,
-            easy_apply: job.job_apply_is_direct,
-            status: 'found',
-            fit_score: fitScore,
-            fit_note: fitNote,
-          }, { onConflict: 'user_id,external_job_id' });
-
-          // Send email
-          await sendJobNotificationEmail({
-            toEmail: profile.email,
-            jobTitle: job.job_title,
-            company: job.employer_name,
-            location: `${job.job_city || ''} ${job.job_country || ''}`.trim(),
-            salary: job.job_min_salary ? `${job.job_min_salary} - ${job.job_max_salary} ${job.job_salary_currency}` : 'Not specified',
-            platform: job.job_publisher,
-            workType: job.job_is_remote ? 'Remote' : 'On-site',
-            fitScore,
-            fitNote: fitNote || '',
-            jobUrl: job.job_apply_link,
-            requirements,
-            candidateName: profile.full_name || 'there',
-          });
-
-          totalEmailsSent++;
-        }
-      } catch (err) {
-        console.error('Error fetching jobs:', err);
+        const fit = await calculateFitScore(profile.cv_text, job.job_title, job.job_description, job.employer_name);
+        fitScore = fit.score;
+        fitNote = fit.note;
+      } catch (e) {
+        console.error('Fit score error:', e);
       }
-    }
 
-    return NextResponse.json({ success: true, emailsSent: totalEmailsSent });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+      await supabase.from('email_notifications').insert({
+        user_id: profile.id,
+        job_id: externalJobId,
+        fit_score: fitScore,
+      });
+
+      if (!fitScore || fitScore < 7) continue;
+
+      let requirements = [];
+      try {
+        requirements = await extractJobRequirements(profile.cv_text, job.job_title, job.job_description, job.employer_name);
+      } catch (e) {
+        console.error('Requirements error:', e);
+      }
+
+      await supabase.from('jobs').upsert({
+        user_id: profile.id,
+        external_job_id: externalJobId,
+        title: job.job_title,
+        company: job.employer_name,
+        location: `${job.job_city || ''} ${job.job_country || ''}`.trim(),
+        work_type: job.job_is_remote ? 'Remote' : 'On-site',
+        description: job.job_description?.slice(0, 2000),
+        url: job.job_apply_link,
+        platform: job.job_publisher,
+        salary_range: job.job_min_salary ? `${job.job_min_salary} - ${job.job_max_salary} ${job.job_salary_currency}` : null,
+        date_posted: job.job_posted_at_datetime_utc,
+        easy_apply: job.job_apply_is_direct,
+        status: 'found',
+        fit_score: fitScore,
+        fit_note: fitNote,
+      }, { onConflict: 'user_id,external_job_id' });
+
+      await sendJobNotificationEmail({
+        toEmail: profile.email,
+        jobTitle: job.job_title,
+        company: job.employer_name,
+        location: `${job.job_city || ''} ${job.job_country || ''}`.trim(),
+        salary: job.job_min_salary ? `${job.job_min_salary} - ${job.job_max_salary} ${job.job_salary_currency}` : 'Not specified',
+        platform: job.job_publisher,
+        workType: job.job_is_remote ? 'Remote' : 'On-site',
+        fitScore,
+        fitNote: fitNote || '',
+        jobUrl: job.job_apply_link,
+        requirements,
+        candidateName: profile.full_name || 'there',
+      });
+
+      totalEmailsSent++;
+    }
+  } catch (err) {
+    console.error('Error fetching jobs:', err);
   }
+
+  return NextResponse.json({ success: true, emailsSent: totalEmailsSent });
 }
