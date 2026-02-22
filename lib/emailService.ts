@@ -42,7 +42,7 @@ export async function sendJobNotificationEmail({
   `).join('');
 
   const { data, error } = await resend.emails.send({
-    from: 'JobApply AI <notifications@yourdomain.com>',
+    from: 'JobApply AI <onboarding@resend.dev>',
     to: toEmail,
     subject: `${scoreEmoji} ${fitScore}/10 Match: ${jobTitle} at ${company}`,
     html: `
