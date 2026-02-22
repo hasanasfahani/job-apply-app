@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import Anthropic from '@anthropic-ai/sdk';
 import { sendJobNotificationEmail } from '@/lib/emailService';
 
+export const maxDuration = 60;
 const CRON_SECRET = process.env.CRON_SECRET;
 const anthropic = new Anthropic();
 
@@ -80,8 +81,8 @@ export async function GET(request: Request) {
 
       if (!prefs || !prefs.job_titles?.length || !prefs.cities?.length) continue;
 
-      for (const title of prefs.job_titles.slice(0, 2)) {
-        for (const city of prefs.cities.slice(0, 2)) {
+      for (const title of prefs.job_titles.slice(0, 1)) {
+        for (const city of prefs.cities.slice(0, 1)) {
           const query = `${title} in ${city}`;
           const url = `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(query)}&num_pages=1&page=1`;
 
