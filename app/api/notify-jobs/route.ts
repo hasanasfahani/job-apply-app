@@ -228,9 +228,9 @@ export async function POST(request: Request) {
       });
     }
 
-    // Merge and deduplicate by title+company (JSearch first — it has full descriptions)
+    // Merge: cap JSearch at 2 so LinkedIn always gets at least 1 slot (total max 3)
     const seen = new Set<string>();
-    const recentJobs = [...jsearchFiltered, ...linkedInJobs].filter((job: any) => {
+    const recentJobs = [...jsearchFiltered.slice(0, 2), ...linkedInJobs].filter((job: any) => {
       const key = `${(job.job_title || '').toLowerCase()}_${(job.employer_name || '').toLowerCase()}`;
       if (seen.has(key)) return false;
       seen.add(key);
