@@ -122,11 +122,8 @@ async function fetchLinkedInJobs(title: string, city: string): Promise<any[]> {
         },
       }
     );
-    const rawText = await response.text();
-    console.log('LinkedIn API status:', response.status);
-    console.log('LinkedIn API response:', rawText.slice(0, 500));
     if (!response.ok) return [];
-    const data = JSON.parse(rawText);
+    const data = await response.json();
     if (Array.isArray(data)) return data;
     if (data?.data && Array.isArray(data.data)) return data.data;
     if (data?.items && Array.isArray(data.items)) return data.items;
@@ -199,7 +196,7 @@ export async function POST(request: Request) {
 
     // Only call LinkedIn API if JSearch didn't find enough new jobs (saves monthly quota)
     let linkedInJobs: any[] = [];
-    if (jsearchNewCount < 100) { // TEMP: force LinkedIn for testing
+    if (jsearchNewCount < 2) {
       const linkedInRaw = await fetchLinkedInJobs(title, city);
       linkedInJobs = linkedInRaw.map((job: any) => {
         const jobUrl = job.url || `https://www.linkedin.com/jobs/view/${job.id}`;
