@@ -201,22 +201,31 @@ export async function POST(request: Request) {
     let linkedInJobs: any[] = [];
     if (jsearchNewCount < 100) { // TEMP: force LinkedIn for testing
       const linkedInRaw = await fetchLinkedInJobs(title, city);
-      linkedInJobs = linkedInRaw.map((job: any) => ({
-        job_id: job.url || '',
-        job_title: job.title || '',
-        employer_name: typeof job.organization === 'string' ? job.organization : (job.organization?.name || ''),
-        job_city: job.locations_derived?.[0]?.city || city,
-        job_country: job.locations_derived?.[0]?.country || '',
-        job_is_remote: job.remote === true,
-        job_description: job.description_text || '',
-        job_apply_link: job.url || '',
-        job_publisher: 'LinkedIn',
-        job_posted_at_datetime_utc: job.date_posted || null,
-        job_min_salary: null,
-        job_max_salary: null,
-        job_salary_currency: null,
-        job_apply_is_direct: true,
-      }));
+      linkedInJobs = linkedInRaw.map((job: any) => {
+        const jobUrl = job.url || `https://www.linkedin.com/jobs/view/${job.id}`;
+        const city_val = job.locations_derived?.[0]?.city
+          || job.locations_raw?.[0]?.address?.addressLocality
+          || city;
+        const country_val = job.locations_derived?.[0]?.country
+          || job.locations_raw?.[0]?.address?.addressCountry
+          || '';
+        return {
+          job_id: jobUrl,
+          job_title: job.title || '',
+          employer_name: typeof job.organization === 'string' ? job.organization : (job.organization?.name || ''),
+          job_city: city_val,
+          job_country: country_val,
+          job_is_remote: job.remote === true,
+          job_description: job.description_text || job.description || '',
+          job_apply_link: jobUrl,
+          job_publisher: 'LinkedIn',
+          job_posted_at_datetime_utc: job.date_posted || null,
+          job_min_salary: null,
+          job_max_salary: null,
+          job_salary_currency: null,
+          job_apply_is_direct: true,
+        };
+      });
     }
 
     // Merge and deduplicate by title+company (JSearch first — it has full descriptions)
