@@ -67,11 +67,14 @@ STRICT RULES:
 - Quantify achievements with numbers wherever possible
 - Keep all facts true — only reorder, rephrase, emphasize
 - Do NOT include the person's name or contact info
+- Do NOT use placeholder text like [Field of Study], [University Name], [Year], [Issuing Body] — use ONLY real information from the CV provided
+- Do NOT add separator lines like "• --" between sections
+- If information for a section is not in the CV, omit that section entirely
 - Return ONLY the CV content starting from PROFESSIONAL SUMMARY
 JOB TITLE: ${jobTitle}
 COMPANY: ${company}
 JOB DESCRIPTION: ${jobDescription?.slice(0, 1000)}
-ORIGINAL CV: ${cvText?.slice(0, 1500)}`,
+ORIGINAL CV: ${cvText?.slice(0, 4000)}`,
     }],
   });
   return (response.content[0] as { text: string }).text;

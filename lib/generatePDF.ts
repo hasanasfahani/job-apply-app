@@ -122,7 +122,7 @@ export async function generateCVPdf(cvText: string, fullName: string, email: str
       }
     } else if (isBullet) {
       const bulletText = line.replace(/^[•\-*]\s*/, '').trim();
-      if (!bulletText) continue;
+      if (!bulletText || /^-+$/.test(bulletText)) continue;
       const wrapped = wrapText(bulletText, contentWidth - 15, helvetica, 9.5);
       for (let i = 0; i < wrapped.length; i++) {
         checkPage(13);
