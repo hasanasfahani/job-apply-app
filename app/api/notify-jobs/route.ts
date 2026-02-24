@@ -140,11 +140,11 @@ export async function POST(request: Request) {
     });
     const data = await response.json();
 
-    // Only process jobs posted in the last 24 hours or with no date
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    // Only process jobs posted in the last 7 days, or with no date (include them)
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const recentJobs = (data.data || []).filter((job: any) => {
-      if (!job.job_posted_at_datetime_utc) return false;
-      return new Date(job.job_posted_at_datetime_utc) >= oneDayAgo;
+      if (!job.job_posted_at_datetime_utc) return true;
+      return new Date(job.job_posted_at_datetime_utc) >= sevenDaysAgo;
     }).slice(0, 3);
 
     for (const job of recentJobs) {
