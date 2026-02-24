@@ -114,7 +114,7 @@ async function fetchLinkedInJobs(title: string, city: string): Promise<any[]> {
       limit: '3',
     });
     const response = await fetch(
-      `https://linkedin-job-search-api.p.rapidapi.com/active-jb-24h?${params}`,
+      `https://linkedin-job-search-api.p.rapidapi.com/active-jb-7d?${params}`,
       {
         headers: {
           'x-rapidapi-host': 'linkedin-job-search-api.p.rapidapi.com',
