@@ -106,6 +106,31 @@ CANDIDATE CV: ${cvText?.slice(0, 1500)}`,
   return (response.content[0] as { text: string }).text;
 }
 
+async function fetchLinkedInJobs(title: string, city: string): Promise<any[]> {
+  try {
+    const params = new URLSearchParams({
+      title_filter: title,
+      location_filter: city,
+      limit: '3',
+    });
+    const response = await fetch(
+      `https://linkedin-job-search-api.p.rapidapi.com/active-jb-24h?${params}`,
+      {
+        headers: {
+          'x-rapidapi-host': 'linkedin-job-search-api.p.rapidapi.com',
+          'x-rapidapi-key': process.env.RAPIDAPI_KEY!,
+        },
+      }
+    );
+    if (!response.ok) return [];
+    const data = await response.json();
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    console.error('LinkedIn jobs fetch error:', e);
+    return [];
+  }
+}
+
 export async function POST(request: Request) {
   const body = await request.json();
   const secret = body.secret || new URL(request.url).searchParams.get('secret');
@@ -135,19 +160,65 @@ export async function POST(request: Request) {
   let totalEmailsSent = 0;
 
   try {
-    const response = await fetch(url, {
+    // Fetch from JSearch
+    const jsearchResponse = await fetch(url, {
       headers: {
         'x-rapidapi-host': 'jsearch.p.rapidapi.com',
         'x-rapidapi-key': process.env.RAPIDAPI_KEY!,
       },
     });
-    const data = await response.json();
+    const jsearchData = await jsearchResponse.json();
+    const jsearchJobs: any[] = jsearchData.data || [];
 
-    // Only process jobs posted in the last 7 days, or with no date (include them)
+    // Pre-filter JSearch jobs by date (7 days)
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const recentJobs = (data.data || []).filter((job: any) => {
+    const jsearchFiltered = jsearchJobs.filter((job: any) => {
       if (!job.job_posted_at_datetime_utc) return true;
       return new Date(job.job_posted_at_datetime_utc) >= sevenDaysAgo;
+    });
+
+    // Check how many JSearch jobs are genuinely new (not already notified)
+    const jsearchNewCount = (await Promise.all(
+      jsearchFiltered.map(async (job: any) => {
+        const { data } = await supabase
+          .from('email_notifications')
+          .select('id')
+          .eq('user_id', profile.id)
+          .eq('job_id', job.job_id)
+          .single();
+        return data ? 0 : 1;
+      })
+    )).reduce((a: number, b: number) => a + b, 0);
+
+    // Only call LinkedIn API if JSearch didn't find enough new jobs (saves monthly quota)
+    let linkedInJobs: any[] = [];
+    if (jsearchNewCount < 2) {
+      const linkedInRaw = await fetchLinkedInJobs(title, city);
+      linkedInJobs = linkedInRaw.map((job: any) => ({
+        job_id: job.url || '',
+        job_title: job.title || '',
+        employer_name: typeof job.organization === 'string' ? job.organization : (job.organization?.name || ''),
+        job_city: job.locations_derived?.[0]?.city || city,
+        job_country: job.locations_derived?.[0]?.country || '',
+        job_is_remote: job.remote === true,
+        job_description: job.description_text || '',
+        job_apply_link: job.url || '',
+        job_publisher: 'LinkedIn',
+        job_posted_at_datetime_utc: job.date_posted || null,
+        job_min_salary: null,
+        job_max_salary: null,
+        job_salary_currency: null,
+        job_apply_is_direct: true,
+      }));
+    }
+
+    // Merge and deduplicate by title+company (JSearch first — it has full descriptions)
+    const seen = new Set<string>();
+    const recentJobs = [...jsearchFiltered, ...linkedInJobs].filter((job: any) => {
+      const key = `${(job.job_title || '').toLowerCase()}_${(job.employer_name || '').toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     }).slice(0, 3);
 
     for (const job of recentJobs) {
