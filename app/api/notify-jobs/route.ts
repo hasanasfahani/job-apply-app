@@ -192,7 +192,7 @@ export async function POST(request: Request) {
 
     // Only call LinkedIn API if JSearch didn't find enough new jobs (saves monthly quota)
     let linkedInJobs: any[] = [];
-    if (jsearchNewCount < 2) {
+    if (jsearchNewCount < 100) { // TEMP: force LinkedIn for testing
       const linkedInRaw = await fetchLinkedInJobs(title, city);
       linkedInJobs = linkedInRaw.map((job: any) => ({
         job_id: job.url || '',
