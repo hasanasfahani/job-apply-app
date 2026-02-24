@@ -122,9 +122,16 @@ async function fetchLinkedInJobs(title: string, city: string): Promise<any[]> {
         },
       }
     );
+    const rawText = await response.text();
+    console.log('LinkedIn API status:', response.status);
+    console.log('LinkedIn API response:', rawText.slice(0, 500));
     if (!response.ok) return [];
-    const data = await response.json();
-    return Array.isArray(data) ? data : [];
+    const data = JSON.parse(rawText);
+    if (Array.isArray(data)) return data;
+    if (data?.data && Array.isArray(data.data)) return data.data;
+    if (data?.items && Array.isArray(data.items)) return data.items;
+    if (data?.jobs && Array.isArray(data.jobs)) return data.jobs;
+    return [];
   } catch (e) {
     console.error('LinkedIn jobs fetch error:', e);
     return [];
